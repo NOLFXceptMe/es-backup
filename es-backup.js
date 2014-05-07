@@ -10,10 +10,12 @@ program.version("0.0.1")
     .option('-s, --snapshot [snapshot]', 'Specify snapshot')
     .option('-b, --backup', 'Take backup')
     .option('-R, --register', 'Register repository')
+    .option('-p, --path [path]', 'Repository path')
     .parse(process.argv);
 
 var repo = program.repository;
 var snapshot = program.snapshot;
+var path = program.path;
 
 async.waterfall([
     /* Check for repository */
@@ -36,8 +38,12 @@ async.waterfall([
         if(repoExists && program.backup) {
             takeBackup(callback);
         } else {
-            console.log("Either repo doesn't exist or no request for backup");
-            callback(null, false);
+            if(!repoExists) {
+                console.error("Repository does not exist. Backup terminated");
+            } else {
+                console.log("No request for backup.");
+                callback(null, false);
+            }
         }
     }
 ], function(err, result) {
@@ -45,7 +51,12 @@ async.waterfall([
 });
 
 function main(result) {
-    console.log("Backup : " + result);
+    if(result) {
+        console.log("Backup successfully completed.");
+    } else {
+        console.error("No backup taken.")
+    }
+
     process.exit();
 }
 
@@ -63,11 +74,12 @@ function checkForRepository(callback) {
 
     var req = http.request(options, function(res) {
         if(res.statusCode == 404) {
-            console.error("No repository '" + repo + "' is registered for ES backups. Use -R, --register to register");
+            console.error("No repository '" + repo + "' is registered for ES backups.");
+            flag = false;
         }
 
         if(res.statusCode == 200) {
-            console.log("Repository found");
+            console.log("Repository found.");
             flag = true;
         }
 
@@ -76,49 +88,54 @@ function checkForRepository(callback) {
 }
 
 function registerRepository(callback) {
-        var options = {
-            hostname : 'localhost',
-            port : 9200,
-            path : '/_snapshot/' + repo,
-            method : 'PUT'
+    if(!path) {
+        console.error("Cannot register repository without path");
+        callback(null, false);
+    }
+
+    var options = {
+        hostname : 'localhost',
+        port : 9200,
+        path : '/_snapshot/' + repo,
+        method : 'PUT'
+    }
+
+    var default_repo_options = {
+        type : 'fs',
+        settings : {
+            location : path,
+            compress : true
         }
+    };
 
-        var default_repo_options = {
-            type : 'fs',
-            settings : {
-                location : '/home/naveen/es_backup',
-                compress : true
+    var req = http.request(options, function(res) {
+        res.on('data', function(body) {
+            var jsonBody = JSON.parse(body);
+
+            if(jsonBody.acknowledged) {
+                console.log('Created repository ' + repo + ' at ' + path);
+                callback(null, true);
             }
-        };
-
-        var req = http.request(options, function(res) {
-            res.on('data', function(body) {
-                var jsonBody = JSON.parse(body);
-                console.log(jsonBody.acknowledged);
-
-                if (jsonBody.acknowledged == true) {
-                    flag = true;
-                }
-            });
-
-            callback(null, true);
+            else
+                callback(null, false);
         });
+    });
 
-        req.on('error', function(e) {
-            console.error("Error connecting to ES while attempting to register repo");
-            console.error(e);
+    req.on('error', function(e) {
+        console.error("Error while attempting to register repo");
+        console.error(e);
 
-            callback(null, false);
-        });
+        callback(null, false);
+    });
 
-        req.write(JSON.stringify(default_repo_options));
-        req.end();
+    req.write(JSON.stringify(default_repo_options));
+    req.end();
 }
 
 function takeBackup(callback) {
     if(!snapshot) {
         var date = moment().format('YYYY-MM-DD');
-        snapshot = "ESBackup" + date;
+        snapshot = "esbackup." + date;
     }
 
     var options = {
@@ -128,17 +145,16 @@ function takeBackup(callback) {
         method : 'PUT'
     }
 
-    console.log("Making snapshot request");
+    console.log("Starting backup. Repository '" + repo + "' and snapshot '" + snapshot + "'");
     var req = http.request(options, function(res) {
         res.on('data', function(body) {
-            flag = true;
            var jsonBody = JSON.parse(body);
-            console.log(jsonBody);
+           console.log(jsonBody);
         });
 
         callback(null, true);
     }).on('error', function(e) {
-        console.error("Error in taking ES backup");
+        console.error("Error while taking ES backup");
         console.error(e);
 
         callback(null, false);
